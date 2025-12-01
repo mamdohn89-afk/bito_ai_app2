@@ -18,7 +18,12 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
   bool _loading = true;
   bool _storeAvailable = false;
   List<ProductDetails> _products = [];
-  final List<String> _productIds = ['bito.weekly1', 'bito.monthly1', 'bito.yearly1'];
+  final List<String> _productIds = [
+    'bito.weekly2',
+    'bito.monthly2',
+    'bito.yearly2'
+  ];
+
 
 
   // بيانات الباقات المعدلة بالريال السعودي
@@ -149,20 +154,25 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
       }
     }
   }
-// 🔥 🔥 🔥 أضف هذا الكود هنا مباشرة بعد _loadProducts 🔥 🔥 🔥
-  ProductDetails _getProductById(String productId) {
-    final bool isStoreAvailable = _storeAvailable && _products.isNotEmpty;
-    final List<ProductDetails> displayProducts = isStoreAvailable ? _products : _demoProducts;
-
-    try {
-      return displayProducts.firstWhere(
-            (p) => p.id == productId,
-        orElse: () => _demoProducts.firstWhere((p) => p.id == productId),
-      );
-    } catch (e) {
-      return _demoProducts.firstWhere((p) => p.id == productId);
+ProductDetails _getProductById(String productId) {
+  try {
+    // إذا المنتجات نازلة فعليًا من Apple → استخدمها فقط
+    if (_storeAvailable && _products.isNotEmpty) {
+      return _products.firstWhere((p) => p.id == productId);
     }
+
+    // في حالة أن Apple لم ترجع شيء → لا نقوم بشراء حقيقي
+    throw Exception("Product not found");
+  } catch (e) {
+    print("⚠️ المنتج غير موجود على متجر Apple: $productId");
+    _showDialog(
+      "المتجر غير متاح",
+      "لا يمكن تنفيذ عملية الشراء الآن. يرجى المحاولة لاحقًا.",
+    );
+    return _demoProducts.first; // لا يستخدم في الشراء – فقط placeholder
   }
+}
+
 // 🔥 🔥 🔥 نهاية الإضافة 🔥 🔥 🔥
 
   void _handlePurchase(ProductDetails product) async {
@@ -505,7 +515,7 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
             price: "٢٩٫٩٩ ر.س",
             duration: "7 أيام",
             onTap: () => _handlePurchase(
-                _getProductById("bito.weekly1")
+                _getProductById("bito.weekly2")
             ),
           ),
 
@@ -515,7 +525,7 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
             price: "٧٩٫٩٩ ر.س",
             duration: "30 يوم",
             onTap: () => _handlePurchase(
-              _getProductById("bito.monthly1"),
+              _getProductById("bito.monthly2"),
             ),
           ),
 
@@ -526,7 +536,7 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
             duration: "365 يوم",
             saveTag: "🔥 وفر 69%",
             onTap: () => _handlePurchase(
-              _getProductById("bito.yearly1"),
+              _getProductById("bito.yearly2"),
             ),
           ),
         ],
