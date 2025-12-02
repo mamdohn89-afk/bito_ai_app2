@@ -223,7 +223,14 @@ ProductDetails _getProductById(String productId) {
     final token = prefs.getString('auth_token') ?? '';
     final userEmail = prefs.getString('user_email') ?? '';
     const secret = "06acbbcf779f421589311198fddf70ee";
-    final receiptData = purchase.verificationData.serverVerificationData;
+    final receiptData = purchase.verificationData.serverVerificationData.isNotEmpty
+        ? purchase.verificationData.serverVerificationData
+        : purchase.verificationData.localVerificationData;
+
+    print("🧾 server: ${purchase.verificationData.serverVerificationData}");
+    print("📄 local: ${purchase.verificationData.localVerificationData}");
+    print("📦 FINAL RECEIPT SENT: $receiptData");
+
     print("📦 Server Receipt: $receiptData");
 
     try {
