@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io'; // 🔥 لإضافة دعم Platform.isIOS
+
 import 'package:flutter/material.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:http/http.dart' as http;
@@ -18,15 +20,15 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
   bool _loading = true;
   bool _storeAvailable = false;
   List<ProductDetails> _products = [];
-  final List<String> _productIds = [
-    'bito.weekly2',
-    'bito.monthly2',
-    'bito.yearly2'
-  ];
+ // IDs المستخدمة في App Store Connect والسيرفر
+   final List<String> _productIds = [
+     'bito.weekly1',
+     'bito.monthly1',
+     'bito.yearly1'
+   ];
 
 
-
-  // بيانات الباقات المعدلة بالريال السعودي
+  // بيانات الباقات المعدلة بالريال السعودي (للعرض فقط في حال فشل تحميل Apple)
   final List<Map<String, dynamic>> _demoProductsData = [
     {
       'id': 'bito.weekly1',
@@ -78,6 +80,7 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
   void initState() {
     super.initState();
     _initializeStore();
+    // 💡 يتم تمرير أي تحديث حالة (شراء جديد، استعادة) إلى _onPurchaseUpdate
     _subscription = _iap.purchaseStream.listen(_onPurchaseUpdate, onDone: () {
       _subscription.cancel();
     });
@@ -100,6 +103,19 @@ class _IOSSubscriptionPageState extends State<IOSSubscriptionPage> {
         }
         return;
       }
+
+      // 🔥 إضافة جديدة: إصلاح خطأ `queryPastPurchases` واستخدام `restorePurchases` للتنظيف 🔥
+      if (Platform.isIOS) {
+        print('🔍 جاري استدعاء RestorePurchases لتنظيف المعاملات العالقة...');
+
+        // استدعاء restorePurchases() الذي يرسل المعاملات المستعادة إلى purchaseStream
+        // **يحل مشكلة "queryPastPurchases" المفقودة**
+        _iap.restorePurchases();
+
+        print('✅ تم استدعاء Restore. المعاملات ستُعالج في _onPurchaseUpdate.');
+      }
+      // 🔥 نهاية الإضافة 🔥
+
 
       if (mounted) {
         setState(() {
@@ -173,8 +189,6 @@ ProductDetails _getProductById(String productId) {
   }
 }
 
-// 🔥 🔥 🔥 نهاية الإضافة 🔥 🔥 🔥
-
   void _handlePurchase(ProductDetails product) async {
     // نتأكد أن المتجر متاح وأن المنتج موجود فعليًا في قائمة المنتجات القادمة من Apple
     final bool productExists =
@@ -192,8 +206,9 @@ ProductDetails _getProductById(String productId) {
       print('🔄 بدء عملية الشراء: ${product.id}');
       final purchaseParam = PurchaseParam(productDetails: product);
       await _iap.buyNonConsumable(purchaseParam: purchaseParam);
+      print('✅ تم إرسال طلب الشراء إلى Apple.');
     } catch (e) {
-      print('❌ خطأ في الشراء: $e');
+      print('❌ خطأ في الشراء (فشل الاتصال بـ StoreKit): $e');
       _showDialog(
         "خطأ في الشراء",
         "حدث خطأ أثناء عملية الشراء: ${e.toString()}",
@@ -202,129 +217,76 @@ ProductDetails _getProductById(String productId) {
   }
 
 
+// 🔥 تم تعديل هذه الدالة لاستخدام التفعيل المباشر (Direct Activation) 🔥
   Future<void> _onPurchaseUpdate(List<PurchaseDetails> purchases) async {
+    print('🚨 استقبال تحديثات الشراء. عدد المعاملات: ${purchases.length}');
     for (var purchase in purchases) {
-      if (purchase.status == PurchaseStatus.purchased) {
-        _showSnack("✅ جاري التحقق من الدفع...");
-        await _verifyPurchaseWithServer(purchase);
-        if (purchase.pendingCompletePurchase) {
-          await _iap.completePurchase(purchase);
-        }
-      } else if (purchase.status == PurchaseStatus.error) {
-        _showDialog("فشل العملية", purchase.error?.message ?? "حدث خطأ غير متوقع.");
-      } else if (purchase.status == PurchaseStatus.pending) {
-        _showSnack("⏳ العملية قيد المعالجة...");
+      print('📦 حالة معاملة ${purchase.productID}: ${purchase.status}');
+
+      // ✨ نرسل فقط: شراء + استعادة
+      if (purchase.status == PurchaseStatus.purchased ||
+          purchase.status == PurchaseStatus.restored) {
+        await _sendPurchaseToServer(purchase);
+      }
+
+      // 🟣 إكمال معاملة Apple
+      if (purchase.pendingCompletePurchase) {
+        await _iap.completePurchase(purchase);
       }
     }
   }
+Future<void> _sendPurchaseToServer(PurchaseDetails purchase) async {
+  final prefs = await SharedPreferences.getInstance();
+  final userEmail = prefs.getString('user_email') ?? '';
+  final token = prefs.getString('auth_token') ?? '';
 
-  Future<void> _verifyPurchaseWithServer(PurchaseDetails purchase) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token') ?? '';
-    final userEmail = prefs.getString('user_email') ?? '';
-    const secret = "06acbbcf779f421589311198fddf70ee";
-    final receiptData = purchase.verificationData.serverVerificationData.isNotEmpty
-        ? purchase.verificationData.serverVerificationData
-        : purchase.verificationData.localVerificationData;
+  print("📤 إرسال حالة الشراء للسيرفر...");
+  print("➡ product_id = ${purchase.productID}");
+  print("➡ status = ${purchase.status.name}");
+  print("➡ email = $userEmail");
 
-    print("🧾 server: ${purchase.verificationData.serverVerificationData}");
-    print("📄 local: ${purchase.verificationData.localVerificationData}");
-    print("📦 FINAL RECEIPT SENT: $receiptData");
+  final response = await http.post(
+    Uri.parse("https://studybito.com/wp-json/bito/v1/ios_process_purchase"),
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    },
+    body: jsonEncode({
+      "product_id": purchase.productID,
+      "status": purchase.status.name,
+      "user_email": userEmail,
+    }),
+  );
 
-    print("📦 Server Receipt: $receiptData");
+  print("📦 رد السيرفر: ${response.body}");
+  try {
+    final data = jsonDecode(response.body);
 
-    try {
-      final response = await http.post(
-        Uri.parse("https://studybito.com/wp-json/bito/v1/ios_purchase"),
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer $token",
-        },
-        body: jsonEncode({
-          "receipt-data": receiptData,
-          "password": secret,
-          "user_email": userEmail,
-          "product_id": purchase.productID,
-        }),
-      );
+    if (data["success"] == true) {
+      if (!mounted) return;
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true) {
-          _showSnack("🎉 تم تفعيل ${data['plan']} بنجاح!");
+      // ⭐ رسالة نجاح
+      _showSnack("🎉 تم تفعيل الباقة بنجاح!");
 
-          // 🔥 حفظ البيانات المحلي - الإضافة المهمة
-          await prefs.setString('user_subscription', data['product_id']);
-          await prefs.setBool('is_premium', true);
-          await prefs.setString('subscription_expires', data['expires_date'] ?? '');
-
-          // العودة الآمنة للرئيسية بعد ثانيتين
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          });
+      // ⭐ إعادة توجيه المستخدم بعد ثانيتين
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop(); // يرجع لصفحة study
         }
-        else {
-          // ❌ فشل تحقق Apple - جرب التفعيل المباشر
-
-        }
-      } else {
-        // ❌ خطأ في السيرفر - جرب التفعيل المباشر
-
-      }
-    } catch (e) {
-      // ❌ خطأ في الاتصال - جرب التفعيل المباشر
-
+      });
     }
+  } catch (e) {
+    print("❌ فشل معالجة الرد: $e");
   }
-// ✅ أضف هذه الدالة هنا
-  Future<void> _activateUserSubscription(String productId, String userEmail) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('auth_token') ?? '';
 
-      final response = await http.post(
-        Uri.parse("https://studybito.com/wp-json/bito/v1/activate_subscription"),
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer $token",
-        },
-        body: jsonEncode({
-          "product_id": productId,
-          "user_email": userEmail,
-          "platform": "ios",
-        }),
-      );
+}
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true) {
-          print('✅ تم تفعيل الباقة: ${data['plan_name']}');
 
-          // حفظ محلي
-          await prefs.setString('user_subscription', productId);
-          await prefs.setBool('is_premium', true);
-          await prefs.setString('subscription_expires', data['expires_date'] ?? '');
 
-          _showSnack("🎉 تم تفعيل ${data['plan_name']} بنجاح!");
 
-          // العودة للرئيسية
-          Future.delayed(const Duration(seconds: 2), () {
-            if (mounted && Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          });
-        } else {
-          _showDialog("خطأ", data['message'] ?? "فشل في تفعيل الباقة");
-        }
-      }
-    } catch (e) {
-      print('❌ خطأ في تفعيل الباقة: $e');
-      _showDialog("خطأ", "حدث خطأ: $e");
-    }
-  }
+
   void _showSnack(String msg) {
+  if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
@@ -335,6 +297,7 @@ ProductDetails _getProductById(String productId) {
   }
 
   void _showDialog(String title, String message) {
+if (!mounted) return;
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -522,7 +485,7 @@ ProductDetails _getProductById(String productId) {
             price: "٢٩٫٩٩ ر.س",
             duration: "7 أيام",
             onTap: () => _handlePurchase(
-                _getProductById("bito.weekly2")
+                _getProductById("bito.weekly1")
             ),
           ),
 
@@ -532,7 +495,7 @@ ProductDetails _getProductById(String productId) {
             price: "٧٩٫٩٩ ر.س",
             duration: "30 يوم",
             onTap: () => _handlePurchase(
-              _getProductById("bito.monthly2"),
+              _getProductById("bito.monthly1"),
             ),
           ),
 
@@ -543,7 +506,7 @@ ProductDetails _getProductById(String productId) {
             duration: "365 يوم",
             saveTag: "🔥 وفر 69%",
             onTap: () => _handlePurchase(
-              _getProductById("bito.yearly2"),
+              _getProductById("bito.yearly1"),
             ),
           ),
         ],
@@ -557,4 +520,3 @@ ProductDetails _getProductById(String productId) {
     super.dispose();
   }
 }
-
